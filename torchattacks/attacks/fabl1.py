@@ -1,16 +1,15 @@
 import torch
-import torch.distributions.uniform as uniform
 
 from ..attack import Attack
 
 
-class FAB(Attack):
+class FABL1(Attack):
     r"""
     Fast Adaptive Boundary Attack (FAB) in the paper 'Minimally distorted Adversarial Examples with a Fast Adaptive Boundary Attack'
     [https://arxiv.org/abs/1907.02044]
     [https://github.com/fra31/fab-attack]
 
-    Distance Measure : Linf
+    Distance Measure : L1
 
     Arguments:
         model (nn.Module): model to attack.
@@ -28,13 +27,13 @@ class FAB(Attack):
         - output: :math:`(N, C, H, W)`.
 
     Examples::
-        >>> attack = torchattacks.FAB(model, eps=8/255, n_restarts=1, n_iter=10, alpha_max=0.1, eta=1.05, beta=0.9, las=False)
+        >>> attack = torchattacks.FABL1(model, eps=8/255, n_restarts=1, n_iter=10, alpha_max=0.1, eta=1.05, beta=0.9, las=False)
         >>> adv_images = attack(images, labels)
 
     """
 
     def __init__(self, model, eps=8/255, n_restarts=1, n_iter=10, alpha_max=0.1, eta=1.05, beta=0.9, las=False):
-        super().__init__("FAB", model)
+        super().__init__("FABL1", model)
         self.eps = eps
         self.n_restarts = n_restarts
         self.n_iter = n_iter
@@ -73,24 +72,24 @@ class FAB(Attack):
 
         for counter_restarts in range(self.n_restarts):
             if counter_restarts > 0:
-                t = uniform.Uniform(-1, 1).sample(x1.shape).to(self.device)
+                t = torch.rand(x1.shape[0], x1.shape[1], x1.shape[2], x1.shape[3])  # nopep8
                 a = torch.min(res2, eps).reshape((-1, 1, 1, 1)) * t
-                b = torch.abs(t.view(t.shape[0], -1)).max(dim=1, keepdim=True)[0].view((-1, 1, 1, 1))  # nopep8
+                b = torch.sum(torch.abs(t).view(t.shape[0], -1), -1).view(t.shape[0], 1, 1, 1)  # nopep8
                 x1 = im2 + a / b * 0.5
                 x1 = torch.clamp(x1, min=0.0, max=1.0)
 
             for _ in range(self.n_iter):
                 # print(i)
                 df, dg = self.get_diff_logits_grads_batch(x1, la2)
-                dist1 = torch.abs(df) / (1e-8 + torch.sum(torch.abs(dg).view(dg.shape[0], dg.shape[1], -1), -1))  # nopep8
+                dist1 = torch.abs(df) / torch.max(1e-12 + torch.abs(dg).reshape((df.shape[0], df.shape[1], -1)), 2)[0]  # nopep8
                 ind = torch.argmin(dist1, 1)
                 b = - df[u1, ind] + torch.sum(torch.reshape(dg[u1, ind] * x1, (bs, -1)), 1).to(self.device)  # nopep8
                 w = torch.reshape(dg[u1, ind], [bs, -1]).to(self.device)
                 x2 = torch.reshape(x1, (bs, -1))
-                d3 = self.projection_linf(torch.cat((x2, x0), 0), torch.cat((w, w), 0), torch.cat((b, b), 0))  # nopep8
+                d3 = self.projection_l1(torch.cat((x2, x0), 0), torch.cat((w, w), 0), torch.cat((b, b), 0))  # nopep8
                 d1 = torch.reshape(d3[:bs], x1.shape)
                 d2 = torch.reshape(d3[-bs:], x1.shape)
-                a0 = torch.abs(d3).max(dim=1, keepdim=True)[0].view(-1, 1, 1, 1)  # nopep8
+                a0 = torch.sum(torch.abs(d3), dim=1, keepdim=True).view(-1, 1, 1, 1)  # nopep8
                 a0 = torch.max(a0, 1e-8 * torch.ones(a0.shape, device=self.device))  # nopep8
                 a1 = a0[:bs]
                 a2 = a0[-bs:]
@@ -101,7 +100,7 @@ class FAB(Attack):
                 is_adv = torch.argmax(self.get_logits(x1), 1) != la2
                 if torch.sum(is_adv) > 0:
                     temp_var = torch.reshape(x1[is_adv] - im2[is_adv], (torch.sum(is_adv), -1))  # nopep8
-                    t = torch.max(torch.abs(temp_var), 1)[0]
+                    t = torch.sum(torch.abs(temp_var).view(torch.sum(is_adv), -1), -1)
                     temp_var_3 = x1[is_adv] * (t < res2[is_adv]).float().reshape([-1, 1, 1, 1])  # nopep8
                     temp_var_4 = adv[is_adv] * (t >= res2[is_adv]).float().reshape([-1, 1, 1, 1])  # nopep8
                     adv[is_adv] = temp_var_3 + temp_var_4
@@ -144,65 +143,56 @@ class FAB(Attack):
             x.grad.detach_()
             x.grad.zero_()
 
-    def projection_linf(self, t2, w2, b2):
+    def projection_l1(self, t2, w2, b2):
         t = t2.clone().float()
         w = w2.clone().float()
         b = b2.clone().float()
 
-        ind2 = torch.nonzero(torch.sum(w * t, 1) - b < 0)
+        c = torch.sum(w * t, 1) - b
+        ind2 = c < 0
         w[ind2] *= -1
-        b[ind2] *= -1
+        c[ind2] *= -1
 
-        c5 = (w < 0).type(torch.FloatTensor).to(self.device)
-        a = torch.ones(t.shape).to(self.device)
-        d = (a * c5 - t) * (w != 0).type(torch.FloatTensor).to(self.device)
-        a -= a * (1 - c5)
+        r = torch.max(1 / w, -1 / w)
+        r = torch.min(r, 1e20 * torch.ones(r.shape, device=self.device))  # nopep8
+        indr = torch.argsort(r, dim=1)
+        indr_rev = torch.argsort(indr)
 
-        p = torch.ones(t.shape, device=self.device) * c5 - t * (2 * c5 - 1)
-        indp = torch.argsort(p, dim=1)
+        u = torch.arange(0, w.shape[0]).unsqueeze(1).to(self.device)
+        u2 = torch.arange(0, w.shape[1]).repeat(w.shape[0], 1).to(self.device)  # nopep8
 
-        b = b - torch.sum(w * t, 1)
-        b0 = torch.sum(w * d, 1)
-        b1 = b0.clone()
+        c6 = (w < 0).float()
+        d = (-t + c6) * (w != 0).float().to(self.device)
+        d2 = torch.min(-w * t, w * (1 - t))
+        ds = d2[u, indr]
+        ds2 = torch.cat((c.unsqueeze(-1), ds), 1)
+        s = torch.cumsum(ds2, dim=1)
 
-        indp2 = indp.unsqueeze(-1).flip(dims=(1, 2)).squeeze()
-        u = torch.arange(0, w.shape[0])
-        ws = w[u.unsqueeze(1), indp2]
-        bs2 = -ws * d[u.unsqueeze(1), indp2]
-
-        s = torch.cumsum(ws.abs(), dim=1)
-        sb = torch.cumsum(bs2, dim=1) + b0.unsqueeze(1)
-
-        b2 = sb[u, -1] - s[u, -1] * p[u, indp[u, 0]]
-        c_l = torch.nonzero(b - b2 > 0).squeeze()
-        c2 = torch.nonzero((b - b1 > 0) * (b - b2 <= 0)).squeeze()
+        c4 = s[:, -1] < 0
+        c2 = c4.nonzero().squeeze(-1)
 
         lb = torch.zeros(c2.shape[0], device=self.device)
-        ub = torch.ones(c2.shape[0], device=self.device) * (w.shape[1] - 1)
-        nitermax = torch.ceil(torch.log2(torch.tensor(w.shape[1]).float()))
+        ub = torch.ones(c2.shape[0], device=self.device) * (s.shape[1])
+        nitermax = torch.ceil(torch.log2(torch.tensor(s.shape[1]).float()))
+        counter2 = torch.zeros(lb.shape).type(torch.cuda.LongTensor)
 
         for _ in range(int(nitermax.item())):
-            counter4 = torch.floor((lb + ub) / 2)
-            counter2 = counter4.type(torch.LongTensor)
-            indcurr = indp[c2, -counter2 - 1]
-            b2 = sb[c2, counter2] - s[c2, counter2] * p[c2, indcurr]
-            ind3 = b[c2] - b2 > 0
+            counter4 = torch.floor((lb + ub)/2)
+            counter2 = counter4.type(torch.cuda.LongTensor)
+            ind3 = s[c2, counter2] > 0
             ind32 = ~ind3
             lb[ind3] = counter4[ind3]
             ub[ind32] = counter4[ind32]
 
-        lb = lb.cpu().numpy().astype(int)
+        lb2 = lb.cpu().numpy().astype(int)
+        if c2.nelement() != 0:
+            alpha = -s[c2, lb2] / w[c2, indr[c2, lb2]]
+            c5 = u2[c2].float() < lb.unsqueeze(-1).float()
+            u3 = c5[u[:c5.shape[0]], indr_rev[c2]]
+            d[c2] = d[c2] * u3.float()
+            d[c2, indr[c2, lb2]] = alpha
 
-        if c_l.nelement != 0:
-            m = torch.max((b[c_l] - sb[c_l, -1]) / (-s[c_l, -1]), torch.zeros(sb[c_l, -1].shape, device=self.device))  # nopep8
-            lmbd_opt = torch.unsqueeze(m, -1)
-            d[c_l] = (2 * a[c_l] - 1) * lmbd_opt
-
-        m = torch.max((b[c2] - sb[c2, lb])/(-s[c2, lb]), torch.zeros(sb[c2, lb].shape, device=self.device))  # nopep8
-        lmbd_opt = torch.unsqueeze(m, -1)
-        d[c2] = torch.min(lmbd_opt, d[c2]) * c5[c2] + torch.max(-lmbd_opt, d[c2]) * (1 - c5[c2])  # nopep8
-
-        return d * (w != 0).type(torch.cuda.FloatTensor)
+        return d
 
     def linear_approximation_search(self, clean_images, clean_labels, adv_images, niter):
         a1 = clean_images.clone()

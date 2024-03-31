@@ -26,6 +26,7 @@ from .attacks.vnifgsm import VNIFGSM
 from .attacks.spsa import SPSA
 from .attacks.pifgsm import PIFGSM
 from .attacks.pifgsmpp import PIFGSMPP
+from .attacks.fab import FAB
 
 # L2 attacks
 from .attacks.cw import CW
@@ -38,9 +39,11 @@ from .attacks.pgdl2 import PGDL2
 from .attacks.pgdrsl2 import PGDRSL2
 from .attacks.deepfool import DeepFool
 from .attacks.eaden import EADEN
+from .attacks.fabl2 import FABL2
 
 # L1 attacks
 from .attacks.eadl1 import EADL1
+from .attacks.fabl1 import FABL1
 
 # L0 attacks
 from .attacks.sparsefool import SparseFool
@@ -49,7 +52,6 @@ from .attacks.pixle import Pixle
 from .attacks.jsma import JSMA
 
 # Linf, L2 attacks
-from .attacks.fab import FAB
 from .attacks.autoattack import AutoAttack
 from .attacks.square import Square
 
@@ -100,6 +102,8 @@ __all__ = [
     "OnePixel",
     "Pixle",
     "FAB",
+    "FABL1",
+    "FABL2",
     "AutoAttack",
     "Square",
     "MultiAttack",
