@@ -5,23 +5,16 @@ import torch.optim as optim
 from ..attack import Attack
 
 
-class CWBS(Attack):
+class ZOO(Attack):
     r"""
-    CW (binary search version) in the paper 'Towards Evaluating the Robustness of Neural Networks'
-    [https://arxiv.org/abs/1608.04644]
+    ZOO in the paper 'ZOO: Zeroth Order Optimization based Black-box Attacks to Deep Neural Networks without Training Substitute Models'
+    [https://arxiv.org/abs/1708.03999]
 
-    Distance Measure : L2
+    Distance Measure : Linf
 
     Arguments:
         model (nn.Module): model to attack.
-        init_c (float): init_c (or c) in the paper. parameter for box-constraint. (Default: 1)    
-            :math:`minimize \Vert\frac{1}{2}(tanh(w)+1)-x\Vert^2_2+c\cdot f(\frac{1}{2}(tanh(w)+1))`
-        kappa (float): kappa (also written as 'confidence') in the paper. (Default: 0)
-            :math:`f(x')=max(max\{Z(x')_i:i\neq t\} -Z(x')_t, - \kappa)`
-        steps (int): number of steps (also written as 'max_iterations'). (Default: 50)
-        lr (float): learning rate of the Adam optimizer. (Default: 0.01)
-        binary_search_steps (int): The number of times we perform binary search to find the optimal tradeoff-constant between distance and confidence. (Default: 9)
-        abort_early: if true, allows early aborts if gradient descent gets stuck. (Default: True)
+        eps (float): maximum perturbation. (Default: 8/255)
 
     Shape:
         - images: :math:`(N, C, H, W)` where `N = number of batches`, `C = number of channels`,        `H = height` and `W = width`. It must have a range [0, 1].
@@ -29,19 +22,22 @@ class CWBS(Attack):
         - output: :math:`(N, C, H, W)`.
 
     Examples::
-        >>> attack = torchattacks.CWBSL2(model, init_c=1, kappa=0, steps=50, lr=0.01, binary_search_steps=9, abort_early=True)
+        >>> attack = torchattacks.ZOO(model, eps=8/255)
         >>> adv_images = attack(images, labels)
 
     """
 
-    def __init__(self, model, init_c=1, kappa=0, steps=50, lr=0.01, binary_search_steps=9, abort_early=True):
-        super().__init__("CWBS", model)
+    def __init__(self, model, init_c=1, kappa=0, steps=50, lr=0.01, binary_search_steps=9, abort_early=True, adam_beta1=0.9, adam_beta2=0.999, reset_adam_after_found=False):
+        super().__init__("ZOO", model)
         self.init_c = init_c
         self.kappa = kappa
         self.steps = steps
         self.lr = lr
         self.binary_search_steps = binary_search_steps
         self.abort_early = abort_early
+        self.beta1 = adam_beta1
+        self.beta2 = adam_beta2
+        self.reset_adam_after_found = reset_adam_after_found
         self.supported_mode = ["default", "targeted"]
 
     def forward(self, images, labels):
@@ -54,6 +50,15 @@ class CWBS(Attack):
 
         if self.targeted:
             labels = self.get_target_label(images, labels)
+
+        # ADAM status
+        self.mt = torch.zeros(images.shape).to(self.device)
+        self.vt = torch.zeros(images.shape).to(self.device)
+        self.adam_epoch = torch.ones(images.shape).to(self.device)
+        self.real_modifier = torch.zeros(
+            images.shape).unsqueeze(0).to(self.device)
+        self.var_list = torch.arange(0, torch.prod(images)).to(self.device)
+        self.hess = torch.ones(images.shape).to(self.device)
 
         # w = torch.zeros_like(images).detach() # Requires 2x times
         w = self.inverse_tanh_space(images).detach()
@@ -81,7 +86,25 @@ class CWBS(Attack):
                 (batch_size, ), -1, dtype=torch.long).to(self.device)
             best_Lx = torch.full((batch_size, ), 1e10).to(self.device)
             prev_cost = 1e10
+
+            # reset ADAM status
+            self.mt = torch.zeros(images.shape).to(self.device)
+            self.vt = torch.zeros(images.shape).to(self.device)
+            self.adam_epoch = torch.ones(images.shape).to(self.device)
+
             for step in range(self.steps):
+
+                var = self.real_modifier.unsqueeze(
+                    0).expand(batch_size * 2 + 1, -1)
+                var_size = self.real_modifier.size
+                var_indice = torch.randint(
+                    0, self.var_list.shape[0], (batch_size, ), dtype=torch.long)
+                indice = self.var_list[var_indice]
+
+                for i in range(batch_size):
+                    var[i * 2 + 1, indice[i]] += 0.0001
+                    var[i * 2 + 2, indice[i]] -= 0.0001
+
                 # Get adversarial images
                 adv_images = self.tanh_space(w)
 
@@ -186,3 +209,33 @@ class CWBS(Attack):
             return torch.clamp((other - real), min=-self.kappa)
         else:
             return torch.clamp((real - other), min=-self.kappa)
+
+    def coordinate_ADAM(losses, indice, grad, hess, batch_size, mt_arr, vt_arr, real_modifier, up, down, lr, adam_epoch, beta1, beta2, proj):
+        for i in range(batch_size):
+            grad[i] = (losses[i*2+1] - losses[i*2+2]) / 0.0002 
+        # true_grads = self.sess.run(self.grad_op, feed_dict={self.modifier: self.real_modifier})
+        # true_grads, losses, l2s, scores, nimgs = self.sess.run([self.grad_op, self.loss, self.l2dist, self.output, self.newimg], feed_dict={self.modifier: self.real_modifier})
+        # grad = true_grads[0].reshape(-1)[indice]
+        # print(grad, true_grads[0].reshape(-1)[indice])
+        # self.real_modifier.reshape(-1)[indice] -= self.LEARNING_RATE * grad
+        # self.real_modifier -= self.LEARNING_RATE * true_grads[0]
+        # ADAM update
+        mt = mt_arr[indice]
+        mt = beta1 * mt + (1 - beta1) * grad
+        mt_arr[indice] = mt
+        vt = vt_arr[indice]
+        vt = beta2 * vt + (1 - beta2) * (grad * grad)
+        vt_arr[indice] = vt
+        # epoch is an array; for each index we can have a different epoch number
+        epoch = adam_epoch[indice]
+        corr = (np.sqrt(1 - np.power(beta2,epoch))) / (1 - np.power(beta1, epoch))
+        m = real_modifier.reshape(-1)
+        old_val = m[indice] 
+        old_val -= lr * corr * mt / (np.sqrt(vt) + 1e-8)
+        # set it back to [-0.5, +0.5] region
+        if proj:
+            old_val = np.maximum(np.minimum(old_val, up[indice]), down[indice])
+        # print(grad)
+        # print(old_val - m[indice])
+        m[indice] = old_val
+        adam_epoch[indice] = epoch + 1

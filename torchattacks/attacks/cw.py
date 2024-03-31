@@ -38,7 +38,7 @@ class CW(Attack):
     """
 
     def __init__(self, model, c=1, kappa=0, steps=50, lr=0.01, abort_early=True):
-        super().__init__("CWL2", model)
+        super().__init__("CW", model)
         self.c = c
         self.kappa = kappa
         self.steps = steps
