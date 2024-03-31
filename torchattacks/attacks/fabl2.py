@@ -34,7 +34,7 @@ class FABL2(Attack):
     """
 
     def __init__(self, model, eps=8/255, n_restarts=1, n_iter=10, alpha_max=0.1, eta=1.05, beta=0.9, las=False):
-        super().__init__("FABL1", model)
+        super().__init__("FABL2", model)
         self.eps = eps
         self.n_restarts = n_restarts
         self.n_iter = n_iter
