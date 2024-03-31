@@ -174,11 +174,11 @@ class FABL1(Attack):
         lb = torch.zeros(c2.shape[0], device=self.device)
         ub = torch.ones(c2.shape[0], device=self.device) * (s.shape[1])
         nitermax = torch.ceil(torch.log2(torch.tensor(s.shape[1]).float()))
-        counter2 = torch.zeros(lb.shape).type(torch.cuda.LongTensor)
+        counter2 = torch.zeros(lb.shape).type(torch.LongTensor)
 
         for _ in range(int(nitermax.item())):
             counter4 = torch.floor((lb + ub)/2)
-            counter2 = counter4.type(torch.cuda.LongTensor)
+            counter2 = counter4.type(torch.LongTensor)
             ind3 = s[c2, counter2] > 0
             ind32 = ~ind3
             lb[ind3] = counter4[ind3]
