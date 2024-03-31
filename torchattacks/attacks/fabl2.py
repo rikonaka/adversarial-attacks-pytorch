@@ -198,7 +198,7 @@ class FABL2(Attack):
             c5 = (alpha.unsqueeze(-1) > r[c2]).float()
             d[c2] = d[c2] * c5 - alpha.unsqueeze(-1) * w[c2] * (1 - c5)
 
-        return d * (w != 0).type(torch.cuda.FloatTensor)
+        return d * (w != 0).type(torch.FloatTensor)
 
     def linear_approximation_search(self, clean_images, clean_labels, adv_images, niter):
         a1 = clean_images.clone()
