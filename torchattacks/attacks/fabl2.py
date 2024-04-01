@@ -110,7 +110,7 @@ class FABL2(Attack):
                 temp_var_1 = torch.max(a1 / (a1 + a2), torch.zeros(a1.shape, device=self.device))  # nopep8
                 temp_var_2 = self.alpha_max * torch.ones(a1.shape, device=self.device)  # nopep8
                 alpha = torch.min(temp_var_1, temp_var_2)
-                x1 = (x1 + self.eta * d1) * (1 - alpha) + torch.clamp((im2 + d2 * self.eta) * alpha, min=0.0, max=1.0)  # nopep8
+                x1 = torch.clamp((x1 + self.eta * d1) * (1 - alpha) + (im2 + d2 * self.eta) * alpha, min=0.0, max=1.0)  # nopep8
                 is_adv = torch.argmax(self.get_logits(x1), 1) != la2
                 if torch.sum(is_adv) > 0:
                     temp_var = torch.reshape(x1[is_adv] - im2[is_adv], (torch.sum(is_adv), -1))  # nopep8
