@@ -1,5 +1,7 @@
 import torch
 import torch.nn.functional as F
+import torch.distributions.uniform as uniform
+
 
 from ..attack import Attack
 
@@ -68,7 +70,7 @@ class FABL2(Attack):
         adv_c = images.clone()
         res2 = torch.full((bs, ), 1e10, device=self.device)
         x1 = torch.clone(im2)
-        x0 = im2.clone().reshape(bs, -1)
+        x0 = torch.clone(im2).reshape(bs, -1)
         eps = torch.full(res2.shape, self.eps, device=self.device)
 
         if self.targeted:
@@ -82,7 +84,8 @@ class FABL2(Attack):
 
         for counter_restarts in range(self.n_restarts):
             if counter_restarts > 0:
-                t = torch.rand(x1.shape[0], x1.shape[1], x1.shape[2], x1.shape[3])  # nopep8
+                # t = torch.rand(x1.shape[0], x1.shape[1], x1.shape[2], x1.shape[3])  # nopep8
+                t = uniform.Uniform(-1, 1).sample(x1.shape).to(self.device)
                 a = torch.min(res2, eps).reshape((-1, 1, 1, 1)) * t
                 b1 = torch.sum(torch.square(t).reshape(t.shape[0], -1), -1)
                 b2 = torch.sqrt(b1).reshape((-1, 1, 1, 1)) * 0.5

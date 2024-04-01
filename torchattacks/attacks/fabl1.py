@@ -1,4 +1,5 @@
 import torch
+import torch.distributions.uniform as uniform
 
 from ..attack import Attack
 
@@ -67,7 +68,7 @@ class FABL1(Attack):
         adv_c = images.clone()
         res2 = torch.full((bs, ), 1e10, device=self.device)
         x1 = torch.clone(im2)
-        x0 = im2.clone().reshape(bs, -1)
+        x0 = torch.clone(im2).reshape(bs, -1)
         eps = torch.full(res2.shape, self.eps, device=self.device)
 
         if self.targeted:
@@ -81,7 +82,8 @@ class FABL1(Attack):
 
         for counter_restarts in range(self.n_restarts):
             if counter_restarts > 0:
-                t = torch.rand(x1.shape[0], x1.shape[1], x1.shape[2], x1.shape[3])  # nopep8
+                # t = torch.rand(x1.shape[0], x1.shape[1], x1.shape[2], x1.shape[3])  # nopep8
+                t = uniform.Uniform(-1, 1).sample(x1.shape).to(self.device)
                 a = torch.min(res2, eps).reshape((-1, 1, 1, 1)) * t
                 b = torch.sum(torch.abs(t).view(t.shape[0], -1), -1).view(t.shape[0], 1, 1, 1)  # nopep8
                 x1 = im2 + a / b * 0.5
@@ -90,7 +92,7 @@ class FABL1(Attack):
             for _ in range(self.n_iter):
                 # print(i)
                 df, dg = self.get_diff_logits_grads_batch(x1, la2, la_target2)
-                dist1 = torch.abs(df) / torch.max(1e-12 + torch.abs(dg).reshape((df.shape[0], df.shape[1], -1)), 2)[0]  # nopep8
+                dist1 = torch.abs(df) / torch.max(1e-8 + torch.abs(dg).reshape((df.shape[0], df.shape[1], -1)), 2)[0]  # nopep8
                 ind = torch.argmin(dist1, 1)
                 b = - df[u1, ind] + torch.sum(torch.reshape(dg[u1, ind] * x1, (bs, -1)), 1).to(self.device)  # nopep8
                 w = torch.reshape(dg[u1, ind], [bs, -1]).to(self.device)
@@ -105,12 +107,11 @@ class FABL1(Attack):
                 temp_var_1 = torch.max(a1 / (a1 + a2), torch.zeros(a1.shape, device=self.device))  # nopep8
                 temp_var_2 = self.alpha_max * torch.ones(a1.shape, device=self.device)  # nopep8
                 alpha = torch.min(temp_var_1, temp_var_2)
-                x1 = (x1 + self.eta * d1) * (1 - alpha) + torch.clamp((im2 + d2 * self.eta) * alpha, min=0.0, max=1.0)  # nopep8
+                x1 = torch.clamp((x1 + self.eta * d1) * (1 - alpha) + (im2 + d2 * self.eta) * alpha, min=0.0, max=1.0)  # nopep8
                 is_adv = torch.argmax(self.get_logits(x1), 1) != la2
                 if torch.sum(is_adv) > 0:
                     temp_var = torch.reshape(x1[is_adv] - im2[is_adv], (torch.sum(is_adv), -1))  # nopep8
-                    t = torch.sum(torch.abs(temp_var).view(
-                        torch.sum(is_adv), -1), -1)
+                    t = torch.sum(torch.abs(temp_var).view(torch.sum(is_adv), -1), -1) # nopep8
                     temp_var_3 = x1[is_adv] * (t < res2[is_adv]).float().reshape([-1, 1, 1, 1])  # nopep8
                     temp_var_4 = adv[is_adv] * (t >= res2[is_adv]).float().reshape([-1, 1, 1, 1])  # nopep8
                     adv[is_adv] = temp_var_3 + temp_var_4

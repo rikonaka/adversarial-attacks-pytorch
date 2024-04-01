@@ -68,7 +68,7 @@ class FAB(Attack):
         adv_c = images.clone()
         res2 = torch.full((bs, ), 1e10, device=self.device)
         x1 = torch.clone(im2)
-        x0 = im2.clone().reshape(bs, -1)
+        x0 = torch.clone(im2).reshape(bs, -1)
         eps = torch.full(res2.shape, self.eps, device=self.device)
 
         if self.targeted:
