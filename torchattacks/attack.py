@@ -199,7 +199,7 @@ class Attack(object):
         Set attack mode as targeted.
 
         Arguments:
-            target_label (torch.Tensor): Target category of the targeted attack. 
+            target_label (torch.Tensor): Target labels of the targeted attack. 
             quiet (bool): Display information message or not. (Default: False)
 
         .. note::
