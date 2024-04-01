@@ -54,6 +54,7 @@ from .attacks.jsma import JSMA
 # Linf, L2 attacks
 from .attacks.autoattack import AutoAttack
 from .attacks.square import Square
+from .attacks.afab import AFAB
 
 # Wrapper Class
 from .wrappers.multiattack import MultiAttack
@@ -104,6 +105,7 @@ __all__ = [
     "FAB",
     "FABL1",
     "FABL2",
+    "AFAB",
     "AutoAttack",
     "Square",
     "MultiAttack",
