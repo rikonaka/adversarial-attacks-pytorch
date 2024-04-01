@@ -50,6 +50,7 @@ class Attack(object):
         self.attack_mode = "default"
         self.supported_mode = ["default"]
         self.targeted = False
+        self.target_labels = None
         self._target_map_function = None
 
         # Controls when normalization is used.
@@ -193,18 +194,24 @@ class Attack(object):
         self._target_map_function = self.get_least_likely_label
 
     @wrapper_method
-    def set_mode_targeted_by_label(self, quiet: bool = False) -> None:
+    def set_mode_targeted_by_label(self, target_labels: torch.Tensor, quiet: bool = False) -> None:
         r"""
         Set attack mode as targeted.
 
         Arguments:
+            target_label (torch.Tensor): Target category of the targeted attack. 
             quiet (bool): Display information message or not. (Default: False)
 
         .. note::
             Use user-supplied labels as target labels.
         """
-        self._set_mode_targeted("targeted(label)", quiet)
-        self._target_map_function = "function is a string"
+        if isinstance(target_labels, torch.Tensor):
+            self.target_labels = target_labels
+            self._set_mode_targeted("targeted(label)", quiet)
+            self._target_map_function = "function is a string"
+        else:
+            raise ValueError(
+                'Target labels types not supported: {}'.format(type(target_labels)))
 
     @wrapper_method
     def set_model_training_mode(
@@ -463,7 +470,7 @@ class Attack(object):
                 "target_map_function is not initialized by set_mode_targeted."
             )
         if self.attack_mode == "targeted(label)":
-            target_labels = labels
+            target_labels = self.target_labels
         else:
             target_labels = self._target_map_function(inputs, labels)
         return target_labels

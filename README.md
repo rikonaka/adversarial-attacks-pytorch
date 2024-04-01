@@ -94,10 +94,10 @@ pip install -e .
         ```
     * By label
         ```python
-        atk.set_mode_targeted_by_label(quiet=True)
         # shift all class loops one to the right, 1=>2, 2=>3, .., 9=>0
         target_labels = (labels + 1) % 10
-        adv_images = atk(images, target_labels)
+        atk.set_mode_targeted_by_label(target_labels=target_labels, quiet=True)
+        adv_images = atk(images, labels)
         ```
     * Return to default
         ```python
@@ -154,6 +154,7 @@ The distance measure in parentheses.
 |     **EOTPGD**<br />(Linf)      | Comment on "Adv-BNN: Improved Adversarial Defense through Robust Bayesian Neural Network" ([Zimmermann, 2019](https://arxiv.org/abs/1907.00895))          | [EOT](https://arxiv.org/abs/1707.07397)+PGD                                                                            |
 |    **APGD**<br />(Linf, L2)     | Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks ([Croce et al., 2020](https://arxiv.org/abs/2001.03994)) |                                                                                                                        |
 |    **APGDT**<br />(Linf, L2)    | Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks ([Croce et al., 2020](https://arxiv.org/abs/2001.03994)) | Targeted APGD                                                                                                          |
+|   **AFAB**<br />(Linf, L1, L2)   | Minimally distorted Adversarial Examples with a Fast Adaptive Boundary Attack ([Croce et al., 2019](https://arxiv.org/abs/1907.02044))                 |                                                                             |
 |   **Square**<br />(Linf, L2)    | Square Attack: a query-efficient black-box adversarial attack via random search ([Andriushchenko et al., 2019](https://arxiv.org/abs/1912.00049))         |                                                                                                                        |
 | **AutoAttack**<br />(Linf, L2)  | Reliable evaluation of adversarial robustness with an ensemble of diverse parameter-free attacks ([Croce et al., 2020](https://arxiv.org/abs/2001.03994)) | APGD+APGDT+FAB+Square                                                                                                  |
 |     **DeepFool**<br />(L2)      | DeepFool: A Simple and Accurate Method to Fool Deep Neural Networks ([Moosavi-Dezfooli et al., 2016](https://arxiv.org/abs/1511.04599))                   |                                                                                                                        |
