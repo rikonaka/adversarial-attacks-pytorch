@@ -73,7 +73,6 @@ class MIFGSM(Attack):
 
             adv_images = adv_images + self.alpha * torch.sign(momentum)
             delta = torch.clamp(adv_images - images, min=-self.eps, max=self.eps)
-            adv_images = images + delta
+            adv_images = torch.clamp(images + delta, min=0, max=1)
 
-        adv_images = torch.clamp(images + delta, min=0, max=1)
         return adv_images
