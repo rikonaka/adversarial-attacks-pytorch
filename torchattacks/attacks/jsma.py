@@ -49,9 +49,10 @@ class JSMA(Attack):
             # (we have no control over the convergence of the attack to a data point that is NOT equal to the original class),
             # so we make the default setting of the target label is right circular shift
             # to make attack work if user didn't set target label.
-            target_labels = (labels + 1) % 10
+            class_num = self.get_logits(torch.unsqueeze(images[0], 0)).shape[1]
+            target_labels = (labels + 1) % class_num
 
-        adv_images = None
+        adv_images = []
         for im, tl in zip(images, target_labels):
             # Since the attack uses the Jacobian-matrix,
             # if we input a large number of images directly into it,
@@ -60,42 +61,41 @@ class JSMA(Attack):
             # we only process one image at a time.
             # Shape of MNIST is [-1, 1, 28, 28],
             # and shape of CIFAR10 is [-1, 3, 32, 32].
-            pert_image = self.perturbation_single(
-                torch.unsqueeze(im, 0), torch.unsqueeze(tl, 0)
-            )
-            try:
-                adv_images = torch.cat((adv_images, pert_image), 0)
-            except Exception:
-                adv_images = pert_image
+            im = torch.unsqueeze(im, 0)
+            tl = torch.unsqueeze(tl, 0)
+            pert_image = self.perturb_single(im, tl)
+            pert_image = torch.squeeze(pert_image, 0)
+            adv_images.append(pert_image)
 
+        adv_images = torch.stack(adv_images, 0)
         adv_images = torch.clamp(adv_images, min=0, max=1)
         return adv_images
 
     def compute_jacobian(self, image):
-        var_image = image.clone().detach()
-        var_image.requires_grad = True
-        output = self.get_logits(var_image)
+        image.requires_grad = True
+        output = self.get_logits(image)
+        num_features = int(np.prod(image.shape[1:]))
+        jacobian = torch.zeros(output.shape[1], num_features)
+        mask = torch.zeros_like(output)
+        jacobian = jacobian.to(self.device)
+        mask = mask.to(self.device)
 
-        num_features = int(np.prod(var_image.shape[1:]))
-        jacobian = torch.zeros([output.shape[1], num_features])
         for i in range(output.shape[1]):
-            if var_image.grad is not None:
-                var_image.grad.zero_()
-            output[0][i].backward(retain_graph=True)
-            # Copy the derivative to the target place
-            jacobian[i] = (
-                var_image.grad.squeeze().view(-1, num_features).clone()
-            )  # nopep8
+            mask[:, i] = 1
+            if image.grad is not None:
+                image.grad.detach_()
+                image.grad.zero_()
+            output.backward(mask, retain_graph=True)
+            # jacobian[i] = image.grad.squeeze().view(-1, num_features).clone()
+            jacobian[i] = image.grad.view(-1, num_features).detach()
+            mask[:, i] = 0
 
-        return jacobian.to(self.device)
+        return jacobian
 
-    @torch.no_grad()
-    def saliency_map(
-        self, jacobian, target_label, increasing, search_space, nb_features
-    ):
+    def saliency_map(self, jacobian, target_label, increasing, search_space, nb_features):
         # The search domain
         domain = torch.eq(search_space, 1).float()
-        # The sum of all features' derivative with respect to each class
+        # The sum of all features derivative with respect to each class
         all_sum = torch.sum(jacobian, dim=0, keepdim=True)
         # The forward derivative of the target class
         target_grad = jacobian[target_label]
@@ -107,16 +107,14 @@ class JSMA(Attack):
             increase_coef = 2 * (torch.eq(domain, 0)).float().to(self.device)
         else:
             increase_coef = -1 * 2 * (torch.eq(domain, 0)).float().to(self.device)
-        increase_coef = increase_coef.view(-1, nb_features)
 
-        # Calculate sum of target forward derivative of any 2 features.
+        increase_coef = increase_coef.view(-1, nb_features)
+        # Calculate sum of target forward derivative of any 2 features
         target_tmp = target_grad.clone()
         target_tmp -= increase_coef * torch.max(torch.abs(target_grad))
         # PyTorch will automatically extend the dimensions
-        alpha = target_tmp.view(-1, 1, nb_features) + target_tmp.view(
-            -1, nb_features, 1
-        )
-        # Calculate sum of other forward derivative of any 2 features.
+        alpha = target_tmp.view(-1, 1, nb_features) + target_tmp.view(-1, nb_features, 1)
+        # Calculate sum of other forward derivative of any 2 features
         others_tmp = others_grad.clone()
         others_tmp += increase_coef * torch.max(torch.abs(others_grad))
         beta = others_tmp.view(-1, 1, nb_features) + others_tmp.view(-1, nb_features, 1)
@@ -147,15 +145,13 @@ class JSMA(Attack):
         q = max_idx - p * nb_features
         return p, q
 
-    def perturbation_single(self, image, target_label):
+    def perturb_single(self, image, target_label):
         """
         image: only one element
         label: only one element
         """
         var_image = image
-        var_label = target_label
         var_image = var_image.to(self.device)
-        var_label = var_label.to(self.device)
 
         if self.theta > 0:
             increasing = True
@@ -179,20 +175,16 @@ class JSMA(Attack):
         current_pred = torch.argmax(output.data, 1)
 
         iter = 0
-        while (
-            (iter < max_iters)
-            and (current_pred != target_label)
-            and (search_domain.sum() != 0)
-        ):
+        while iter < max_iters and current_pred != target_label and search_domain.sum() != 0:
             # Calculate Jacobian matrix of forward derivative
             jacobian = self.compute_jacobian(var_image)
+            # jacobian = torch.rand(var_image.shape[0], num_features).to(self.device)
+            # print(jacobian.shape)
             # Get the saliency map and calculate the two pixels that have the greatest influence
             p1, p2 = self.saliency_map(
-                jacobian, var_label, increasing, search_domain, num_features
-            )
+                jacobian, target_label, increasing, search_domain, num_features)
             # Apply modifications
-            # var_sample_flatten = var_image.view(-1, num_features).clone().detach_()
-            var_sample_flatten = var_image.view(-1, num_features)
+            var_sample_flatten = var_image.view(-1, num_features).clone().detach()
             var_sample_flatten[0, p1] += self.theta
             var_sample_flatten[0, p2] += self.theta
 
