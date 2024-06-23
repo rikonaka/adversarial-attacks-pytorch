@@ -13,8 +13,9 @@ class JSMA(Attack):
 
     Arguments:
         model (nn.Module): model to attack.
-        theta (float): perturb length, range is either [theta, 0], [0, theta]. (Default: 1.0)
-        gamma (float): highest percentage of pixels can be modified. (Default: 0.1)
+        theta (float): the change made to pixels. (Default: 1.0)
+        gamma (float): the maximum distortion. (Default: 0.1)
+        increasing (bool): crafting perturbation by increasing or decreasing pixel intensities. (Default: True)
 
     Shape:
         - images: :math:`(N, C, H, W)` where `N = number of batches`, `C = number of channels`,        `H = height` and `W = width`. It must have a range [0, 1].
@@ -22,15 +23,16 @@ class JSMA(Attack):
         - output: :math:`(N, C, H, W)`.
 
     Examples::
-        >>> attack = torchattacks.JSMA(model, theta=1.0, gamma=0.1)
+        >>> attack = torchattacks.JSMA(model, theta=1.0, gamma=0.1, increasing=True)
         >>> adv_images = attack(images, labels)
 
     """
 
-    def __init__(self, model, theta=1.0, gamma=0.1):
+    def __init__(self, model, theta=1.0, gamma=0.1, increasing=True):
         super().__init__("JSMA", model)
         self.theta = theta
         self.gamma = gamma
+        self.increasing = increasing
         self.supported_mode = ["default", "targeted"]
 
     def forward(self, images, labels):
@@ -53,10 +55,9 @@ class JSMA(Attack):
             target_labels = (labels + 1) % class_num
 
         adv_images = images
-        batch_size = images.shape[0]
         dim_x = int(np.prod(images.shape[1:]))
         max_iter = int(dim_x * self.gamma / 2)
-        search_space = torch.ones(batch_size, dim_x).to(self.device)
+        search_space = torch.ones(images.shape[0], dim_x).to(self.device)
         adv_prediction = torch.argmax(self.get_logits(adv_images), 1)
 
         # Algorithm 2
@@ -64,84 +65,102 @@ class JSMA(Attack):
         while torch.sum(adv_prediction != target_labels) != 0 and i < max_iter and torch.sum(search_space != 0) != 0:
             grads_target, grads_other = self.compute_forward_derivative(
                 adv_images, target_labels, class_num)
-
-            p1, p2, valid = self.saliency_map(
+            p1, p2 = self.saliency_map(
                 search_space, grads_target, grads_other, target_labels)
 
-            cond = (adv_prediction != labels) & valid
+            cond = (adv_prediction != target_labels)
             self.update_search_space(search_space, p1, p2, cond)
-
-            xadv = self.modify_xadv(adv_images, batch_size, cond, p1, p2)
-            adv_prediction = torch.argmax(self.get_logits(xadv))
+            adv_images = self.update_adv_images(adv_images, p1, p2, cond)
+            adv_prediction = torch.argmax(self.get_logits(adv_images), 1)
             i += 1
 
         adv_images = torch.clamp(adv_images, min=0, max=1)
         return adv_images
 
-    def jacobian(self, adv_images, c):
-        tmp_images = adv_images.detach().clone().requires_grad_()
-        output = self.get_logits(tmp_images)
-        torch.sum(output[:, c]).backward()
-        return tmp_images.grad.detach().clone()
+    def update_adv_images(self, adv_images, p1, p2, cond):
+        origin_shape = adv_images.shape
+        adv_images = adv_images.view(adv_images.shape[0], -1)
+        for idx in range(adv_images.shape[0]):
+            if cond[idx]:
+                if self.increasing:
+                    # Section IV, A
+                    adv_images[idx, p1[idx]] += self.theta
+                    adv_images[idx, p2[idx]] += self.theta
+                else:
+                    # Section IV, B
+                    adv_images[idx, p1[idx]] -= self.theta
+                    adv_images[idx, p2[idx]] -= self.theta
 
-    def compute_forward_derivative(self, adv_images, target_labels, class_num):
+        adv_images = torch.clamp(adv_images, min=0, max=1)
+        adv_images = adv_images.view(origin_shape)
+        return adv_images
+
+    def update_search_space(self, search_space, p1, p2, cond):
+        # Algorithm 2 line 10 and line 11
+        p1_cond = torch.logical_or(p1 == 0, p1 == 1)
+        p2_cond = torch.logical_or(p2 == 0, p2 == 1)
+
+        # Early stop
+        p1_cond = torch.logical_or(p1_cond, cond)
+        p2_cond = torch.logical_or(p2_cond, cond)
+
+        for ind in range(search_space.shape[0]):
+            if p1_cond[ind]:
+                search_space[ind, p1[ind]] = False
+            if p2_cond[ind]:
+                search_space[ind, p2[ind]] = False
+
+    def jacobian(self, adv_images, class_num):
+        tmp_images = adv_images.detach().clone()
+        tmp_images.requires_grad = True
         jacobians = []
-        for c in range(class_num):
-            j = self.jacobian(adv_images, c)
-            jacobians.append(j)
+        output = self.get_logits(tmp_images)
+
+        for n in range(class_num):
+            if tmp_images.grad is not None:
+                tmp_images.grad.zero_()
+            torch.sum(output[:, n]).backward(retain_graph=True)
+            grad = tmp_images.grad.detach().clone()
+            jacobians.append(grad)
 
         jacobians = torch.stack(jacobians, 0)
+        return jacobians
+
+    def compute_forward_derivative(self, adv_images, target_labels, class_num):
+        jacobians = self.jacobian(adv_images, class_num)
         grads = jacobians.view((jacobians.shape[0], jacobians.shape[1], -1))
         grads_target = grads[target_labels, range(len(target_labels)), :]
         grads_other = grads.sum(dim=0) - grads_target
         return grads_target, grads_other
 
-    def sum_pair(self, grads, dim_x):
-        return grads.view(-1, dim_x, 1) + grads.view(-1, 1, dim_x)
+    def sum_pair(self, grads, dim):
+        # Eq 8 and Eq 9
+        return grads.view(-1, dim, 1) + grads.view(-1, 1, dim)
 
-    def and_pair(self, cond, dim_x):
-        return cond.view(-1, dim_x, 1) & cond.view(-1, 1, dim_x)
+    def and_pair(self, cond, dim):
+        return cond.view(-1, dim, 1) & cond.view(-1, 1, dim)
 
     def saliency_map(self, search_space, grads_target, grads_other, y):
-
-        dim_x = search_space.shape[1]
-
+        dim = search_space.shape[1]
         # alpha in Algorithm 3 line 2
-        gradsum_target = self.sum_pair(grads_target, dim_x)
-        # alpha in Algorithm 3 line 3
-        gradsum_other = self.sum_pair(grads_other, dim_x)
+        gradsum_target = self.sum_pair(grads_target, dim)
+        # beta in Algorithm 3 line 3
+        gradsum_other = self.sum_pair(grads_other, dim)
 
-        if self.theta > 0:
-            scores_mask = (torch.gt(gradsum_target, 0) &
-                           torch.lt(gradsum_other, 0))
+        # Algorithm 3 line 4
+        if self.increasing:
+            scores_mask = torch.logical_and(
+                gradsum_target > 0, gradsum_other < 0)
         else:
-            scores_mask = (torch.lt(gradsum_target, 0) &
-                           torch.gt(gradsum_other, 0))
+            scores_mask = torch.logical_and(
+                gradsum_target < 0, gradsum_other > 0)
 
-        scores_mask &= self.and_pair(search_space.ne(0), dim_x)
-        scores_mask[:, range(dim_x), range(dim_x)] = 0
+        search_space_mask = self.and_pair(search_space != 0, dim)
+        scores_mask = torch.logical_and(scores_mask, search_space_mask)
+        scores_mask[:, range(dim), range(dim)] = 0
+        scores = scores_mask.float() * (-1 * gradsum_target * gradsum_other)
+        best_indices = torch.argmax(scores.view(-1, dim * dim), 1)
 
-        valid = torch.ones(scores_mask.shape[0]).to(torch.bool).to(self.device)
-
-        scores = scores_mask.float() * (-gradsum_target * gradsum_other)
-        best = torch.max(scores.view(-1, dim_x * dim_x), 1)[1]
-        p1 = torch.remainder(best, dim_x)
-        p2 = (best / dim_x).long()
-        return p1, p2, valid
-
-    def modify_xadv(self, xadv, batch_size, cond, p1, p2):
-        ori_shape = xadv.shape
-        xadv = xadv.view(batch_size, -1)
-        for idx in range(batch_size):
-            if cond[idx] != 0:
-                xadv[idx, p1[idx]] += self.theta
-                xadv[idx, p2[idx]] += self.theta
-        xadv = torch.clamp(xadv, min=0, max=1)
-        xadv = xadv.view(ori_shape)
-        return xadv
-
-    def update_search_space(self, search_space, p1, p2, cond):
-        for idx in range(len(cond)):
-            if cond[idx] != 0:
-                search_space[idx, p1[idx]] = 0
-                search_space[idx, p2[idx]] = 0
+        p1 = torch.remainder(best_indices, dim)
+        p2 = ((best_indices - p1) / dim).to(torch.long)
+        return p1, p2
