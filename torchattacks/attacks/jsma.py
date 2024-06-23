@@ -42,6 +42,8 @@ class JSMA(Attack):
 
         images = images.clone().detach().to(self.device)
         labels = labels.clone().detach().to(self.device)
+        # only predict one image
+        class_num = self.get_logits(torch.unsqueeze(images[0], 0)).shape[1]
 
         if self.targeted:
             target_labels = self.get_target_label(images, labels)
@@ -51,7 +53,6 @@ class JSMA(Attack):
             # (we have no control over the convergence of the attack to a data point that is NOT equal to the original class),
             # so we make the default setting of the target label is right circular shift
             # to make attack work if user didn't set target label.
-            class_num = self.get_logits(torch.unsqueeze(images[0], 0)).shape[1]
             target_labels = (labels + 1) % class_num
 
         adv_images = images
